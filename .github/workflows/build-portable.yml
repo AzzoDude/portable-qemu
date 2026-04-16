@@ -1,4 +1,4 @@
-name: portable-qemu
+name: portable-release-actions-workflow
 
 on:
   push:
