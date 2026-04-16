@@ -1,6 +1,6 @@
 name: Build Portable QEMU
 on: 
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch: # Allows manual trigger from Actions tab
   push:
     branches: [ main ]
 
@@ -12,15 +12,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qemu/qemu
-          ref: v9.0.0 # Stable version for automation
+          ref: v9.0.0 # Using a stable version
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
+          # These packages cover all dependencies and the fixes for previous errors
           install: >-
             base-devel
+            git
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-glib2
             mingw-w64-x86_64-pixman
@@ -32,39 +34,39 @@ jobs:
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-libpng
             mingw-w64-x86_64-libjpeg-turbo
+            mingw-w64-x86_64-dtc
+            mingw-w64-x86_64-sphinx
 
-      - name: Compile QEMU (Lean & WHPX Enabled)
+      - name: Configure and Compile
         shell: msys2 {0}
         run: |
           mkdir build && cd build
-          # Targeting only x86_64 to keep the binary small and focused
+          # --enable-whpx is the critical flag for Windows speed
+          # --target-list=x86_64-softmmu keeps the build focused and small
           ../configure --target-list=x86_64-softmmu \
                        --enable-whpx \
                        --prefix=/C/QEMU-Portable \
                        --disable-werror \
-                       --disable-guest-agent \
-                       --static
+                       --disable-guest-agent
           make -j$(nproc)
           make install
 
-      - name: Bundle DLLs and Dependencies
+      - name: Bundle DLLs (The Portable Logic)
         shell: msys2 {0}
         run: |
-          # Create directory structure
-          mkdir -p /C/QEMU-Portable/bin
-          
-          # Move into the bin directory to find dependencies
+          # Move to the bin folder where the .exe lives
           cd /C/QEMU-Portable/bin
           
-          # Identify all required MinGW DLLs and copy them into the bin folder
+          # Find all DLL dependencies from the MSYS2 system and copy them here
+          # This makes the folder run on any Windows machine without MSYS2
           for i in $(ldd qemu-system-x86_64.exe | grep /mingw64/bin | sed 's/.*=> \(\/mingw64\/bin\/.*\)\s(.*)/\1/'); do
             cp -v "$i" .
           done
           
-          # Copy share data (BIOS/Firmware) - required for booting Linux
+          # Copy share folder (BIOS and Firmware) - Required for booting Linux images
           cp -r /C/msys64/mingw64/share/qemu/* /C/QEMU-Portable/share/qemu/ || true
 
-      - name: Create SHA512 Checksum
+      - name: Create SHA512 Checksums
         shell: pwsh
         run: |
           cd C:\QEMU-Portable\bin
@@ -73,7 +75,7 @@ jobs:
             "$hash  $($_.Name)" | Out-File -Append -FilePath "..\checksums.sha512" -Encoding ascii
           }
 
-      - name: Upload Portable Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Portable-QEMU-WHPX
