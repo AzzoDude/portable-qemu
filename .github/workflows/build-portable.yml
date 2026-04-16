@@ -13,6 +13,7 @@ jobs:
         with:
           repository: qemu/qemu
           ref: v9.0.0 
+          submodules: 'recursive' # Ensures slirp and other cores are present
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
@@ -39,13 +40,9 @@ jobs:
       - name: Patch Hardware Strings (Stealth Mode)
         shell: msys2 {0}
         run: |
-          echo "Patching QEMU source for stealth..."
-          # Replace 'QEMU' with 'Intel' or 'ASUS' to bypass VM detection scripts
           sed -i 's/"QEMU"/"Intel"/g' hw/i386/pc.c
           sed -i 's/"QEMU"/"Intel"/g' hw/scsi/scsi-disk.c
           sed -i 's/"QEMU"/"Intel"/g' target/i386/cpu.c
-          sed -i 's/"QEMU"/"ASUS"/g' hw/pci/pci| grep -l "QEMU" || true
-          # Specifically hide the "QEMU HARDDISK" string
           sed -i 's/QEMU HARDDISK/INTEL SSD/g' hw/ide/core.c
           sed -i 's/QEMU HARDDISK/INTEL SSD/g' hw/scsi/scsi-disk.c
 
@@ -53,18 +50,15 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir build && cd build
-          # -Dtests=disabled avoids the linker failure
-          # -Db_lto=true and -O3 ensure the highest performance for automation
           ../configure --target-list=x86_64-softmmu \
                        --enable-whpx \
                        --prefix=/C/QEMU-Portable \
                        --disable-werror \
                        --disable-guest-agent \
                        --enable-capstone \
-                       --enable-slirp=system \
+                       --enable-slirp \
                        --extra-cflags="-O3 -march=native -w" \
                        --mesonopts="-Dtests=disabled -Doptimization=3 -Db_lto=true"
-          
           make -j$(nproc)
           make install
 
@@ -72,31 +66,14 @@ jobs:
         shell: msys2 {0}
         run: |
           cd /C/QEMU-Portable/bin
-          
-          # Capture all Mingw64 dependencies
           for i in $(ldd qemu-system-x86_64.exe | grep -i "mingw64" | awk '{print $3}'); do
-            if [ -f "$i" ]; then
-              cp -v "$i" .
-            fi
+            if [ -f "$i" ]; then cp -v "$i" .; fi
           done
-          
-          # Setup 'share' directory for BIOS/ROMs (CRITICAL for VirtIO and WHPX)
           mkdir -p ../share/qemu
           cp -r /mingw64/share/qemu/* /C/QEMU-Portable/share/qemu/
-
-      - name: Create SHA512 Checksums
-        shell: pwsh
-        run: |
-          if (Test-Path "C:\QEMU-Portable\bin") {
-            cd C:\QEMU-Portable\bin
-            Get-ChildItem -File | ForEach-Object {
-              $hash = (Get-FileHash $_.FullName -Algorithm SHA512).Hash.ToLower()
-              "$hash  $($_.Name)" | Out-File -Append -FilePath "..\checksums.sha512" -Encoding ascii
-            }
-          }
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Portable-QEMU-Stealth-WHPX
+          name: Portable-QEMU-Final
           path: C:\QEMU-Portable
