@@ -1,0 +1,46 @@
+name: Build Portable QEMU
+on: [workflow_dispatch] # Allows you to trigger the build manually
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout QEMU
+        uses: actions/checkout@v4
+        with:
+          repository: qemu/qemu
+          ref: v9.0.0
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-glib2 
+            mingw-w64-x86_64-pixman mingw-w64-x86_64-python mingw-w64-x86_64-ninja 
+            mingw-w64-x86_64-meson
+
+      - name: Compile
+        shell: msys2 {0}
+        run: |
+          mkdir build && cd build
+          ../configure --target-list=x86_64-softmmu --enable-whpx --prefix=/C/QEMU-Portable
+          make -j$(nproc)
+          make install
+
+      - name: Bundle DLLs (Portable Logic)
+        shell: pwsh
+        run: |
+          $binDir = "C:\QEMU-Portable\bin"
+          $msysBin = "C:\msys64\mingw64\bin"
+          # Get all unique DLL dependencies for the main executable
+          $dlls = Get-ChildItem "$binDir\*.exe" | ForEach-Object {
+              ldd $_.FullName | ForEach-Object { if ($_ -match '(?<= => )/mingw64/bin/(.*\.dll)') { $matches[1] } }
+          } | Select-Object -Unique
+          foreach ($dll in $dlls) { Copy-Item "$msysBin\$dll" -Destination $binDir }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Portable-QEMU-WHPX
+          path: C:\QEMU-Portable
