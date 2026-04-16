@@ -1,79 +1,73 @@
-name: Build Portable QEMU (Stealth & Optimized)
-on: 
-  workflow_dispatch:
+name: portable-qemu
+
+on:
   push:
-    branches: [ main ]
+    tags:
+      - '*'
+
+permissions:
+  contents: write    
 
 jobs:
   build:
+    name: Create Release
     runs-on: windows-latest
+    env:
+      targetZip: qemu-w64-portable-${{ github.ref_name }}.zip
+      
     steps:
-      - name: Checkout QEMU Source
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          repository: qemu/qemu
-          ref: v9.0.0 
-          submodules: 'recursive' # Ensures slirp and other cores are present
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            base-devel
-            git
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-glib2
-            mingw-w64-x86_64-pixman
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-meson
-            mingw-w64-x86_64-libpng
-            mingw-w64-x86_64-libjpeg-turbo
-            mingw-w64-x86_64-dtc
-            mingw-w64-x86_64-curl
-            mingw-w64-x86_64-gnutls
-            mingw-w64-x86_64-libslirp
-            mingw-w64-x86_64-capstone
-
-      - name: Patch Hardware Strings (Stealth Mode)
-        shell: msys2 {0}
+      
+      - name: Download Installer
+        shell: cmd
         run: |
-          sed -i 's/"QEMU"/"Intel"/g' hw/i386/pc.c
-          sed -i 's/"QEMU"/"Intel"/g' hw/scsi/scsi-disk.c
-          sed -i 's/"QEMU"/"Intel"/g' target/i386/cpu.c
-          sed -i 's/QEMU HARDDISK/INTEL SSD/g' hw/ide/core.c
-          sed -i 's/QEMU HARDDISK/INTEL SSD/g' hw/scsi/scsi-disk.c
-
-      - name: Configure and Compile
-        shell: msys2 {0}
+          curl -L -o qemu-setup.exe https://qemu.weilnetz.de/w64/qemu-w64-setup-${{ github.ref_name }}.exe
+          
+      - name: Extract and Selective Cleanup
+        shell: cmd
         run: |
-          mkdir build && cd build
-          ../configure --target-list=x86_64-softmmu \
-                       --enable-whpx \
-                       --prefix=/C/QEMU-Portable \
-                       --disable-werror \
-                       --disable-guest-agent \
-                       --enable-capstone \
-                       --enable-slirp \
-                       --extra-cflags="-O3 -march=native -w" \
-                       --mesonopts="-Dtests=disabled -Doptimization=3 -Db_lto=true"
-          make -j$(nproc)
-          make install
-
-      - name: Bundle DLLs & Firmware
-        shell: msys2 {0}
-        run: |
-          cd /C/QEMU-Portable/bin
-          for i in $(ldd qemu-system-x86_64.exe | grep -i "mingw64" | awk '{print $3}'); do
-            if [ -f "$i" ]; then cp -v "$i" .; fi
-          done
-          mkdir -p ../share/qemu
-          cp -r /mingw64/share/qemu/* /C/QEMU-Portable/share/qemu/
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+          mkdir installation
+          :: Extract to local folder
+          qemu-setup.exe /S /D=%CD%\installation
+          cd installation
+          
+          :: 1. Remove the uninstaller (useless for portable)
+          if exist qemu-uninstall.exe del /f /q qemu-uninstall.exe
+          
+          :: 2. Keep only common architectures (x86_64, i386, aarch64, arm)
+          :: This deletes roughly 20+ niche executables like qemu-system-mips, etc.
+          mkdir tmp_keep
+          move qemu-system-x86_64*.exe tmp_keep\
+          move qemu-system-i386*.exe tmp_keep\
+          move qemu-system-aarch64*.exe tmp_keep\
+          move qemu-system-arm*.exe tmp_keep\
+          move qemu-img.exe tmp_keep\
+          move qemu-io.exe tmp_keep\
+          
+          :: Delete other system executables
+          del /f /q qemu-system-*.exe
+          
+          :: Move back the ones we kept
+          move tmp_keep\* .
+          rd tmp_keep
+          
+      - name: Archive Release
+        uses: thedoctor0/zip-release@master
         with:
-          name: Portable-QEMU-Final
-          path: C:\QEMU-Portable
+          type: 'zip'
+          directory: "installation"
+          filename: "../${{ env.targetZip }}"
+          
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "${{ env.targetZip }}"
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "QEMU Portable ${{ github.ref_name }}"
+          body: |
+            ### Portable QEMU Build
+            - **Architectures included:** x86_64, i386, aarch64, arm.
+            - **Tools included:** qemu-img, qemu-io.
+            - Cleaned of uninstaller and niche CPU emulators.
