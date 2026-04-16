@@ -3,40 +3,50 @@ name: portable-release-actions-workflow
 on:
   push:
     tags:
-      - '*'
+      - '*' # Triggers when you push a tag like 20231215 or 8.2.2-1
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 permissions:
   contents: write    
 
 jobs:
   build:
-    name: Create Release
+    name: Create QEMU Portable Release
     runs-on: windows-latest
-    env:
-      targetZip: qemu-w64-portable-${{ github.ref_name }}.zip
-      
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      
-      - name: Download Installer
+
+      - name: Set Version
+        shell: bash
+        run: |
+          # If triggered by a tag, use the tag. If manual, use a default version.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "QEMU_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "QEMU_VERSION=20231215" >> $GITHUB_ENV
+          fi
+
+      - name: Download QEMU Installer
         shell: cmd
         run: |
-          curl -L -o qemu-setup.exe https://qemu.weilnetz.de/w64/qemu-w64-setup-${{ github.ref_name }}.exe
+          curl -L -o qemu-setup.exe https://qemu.weilnetz.de/w64/qemu-w64-setup-%QEMU_VERSION%.exe
           
       - name: Extract and Selective Cleanup
         shell: cmd
         run: |
           mkdir installation
-          :: Extract to local folder
+          :: Extracting the installer to the 'installation' folder
           qemu-setup.exe /S /D=%CD%\installation
+          
           cd installation
           
-          :: 1. Remove the uninstaller (useless for portable)
+          :: 1. Remove the uninstaller
           if exist qemu-uninstall.exe del /f /q qemu-uninstall.exe
           
-          :: 2. Keep only common architectures (x86_64, i386, aarch64, arm)
-          :: This deletes roughly 20+ niche executables like qemu-system-mips, etc.
+          :: 2. Keep only major architectures to save space
+          :: This handles the move-and-delete strategy we discussed
           mkdir tmp_keep
           move qemu-system-x86_64*.exe tmp_keep\
           move qemu-system-i386*.exe tmp_keep\
@@ -45,10 +55,10 @@ jobs:
           move qemu-img.exe tmp_keep\
           move qemu-io.exe tmp_keep\
           
-          :: Delete other system executables
+          :: Delete niche CPU emulators (mips, rx, etc.)
           del /f /q qemu-system-*.exe
           
-          :: Move back the ones we kept
+          :: Move back the essentials
           move tmp_keep\* .
           rd tmp_keep
           
@@ -57,17 +67,26 @@ jobs:
         with:
           type: 'zip'
           directory: "installation"
-          filename: "../${{ env.targetZip }}"
+          filename: "../qemu-w64-portable-${{ env.QEMU_VERSION }}.zip"
           
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "${{ env.targetZip }}"
+          artifacts: "qemu-w64-portable-${{ env.QEMU_VERSION }}.zip"
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          name: "QEMU Portable ${{ github.ref_name }}"
+          name: "QEMU Portable ${{ env.QEMU_VERSION }}"
           body: |
-            ### Portable QEMU Build
-            - **Architectures included:** x86_64, i386, aarch64, arm.
-            - **Tools included:** qemu-img, qemu-io.
-            - Cleaned of uninstaller and niche CPU emulators.
+            ### Portable QEMU for Windows x64
+            This is an automated portable build.
+            
+            **Included Architectures:**
+            - x86_64 / i386
+            - AArch64 / ARM
+            
+            **Utilities:**
+            - qemu-img (disk management)
+            - qemu-io
+            
+            **Usage:**
+            Extract the zip and run `qemu-system-x86_64.exe -L .` via Command Prompt.
